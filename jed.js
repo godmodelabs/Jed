@@ -311,8 +311,8 @@ in order to offer easy upgrades -- jsgettext.berlios.de
   // undefined values.
 
   /**
-   sprintf() for JavaScript 0.7-beta1
-   http://www.diveintojavascript.com/projects/javascript-sprintf
+   sprintf() for JavaScript 1.1.2
+   https://github.com/alexei/sprintf.js/blob/1.1.2/src/sprintf.js
 
    Copyright (c) Alexandru Marasteanu <alexaholic [at) gmail (dot] com>
    All rights reserved.
@@ -339,49 +339,77 @@ in order to offer easy upgrades -- jsgettext.berlios.de
    (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
    SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
   */
-  var sprintf = (function() {
-    function get_type(variable) {
-      return Object.prototype.toString.call(variable).slice(8, -1).toLowerCase();
+   var sprintf = (function () {
+    var re = {
+      not_string: /[^s]/,
+      not_bool: /[^t]/,
+      not_type: /[^T]/,
+      not_primitive: /[^v]/,
+      number: /[diefg]/,
+      numeric_arg: /[bcdiefguxX]/,
+      json: /[j]/,
+      not_json: /[^j]/,
+      text: /^[^\x25]+/,
+      modulo: /^\x25{2}/,
+      placeholder: /^\x25(?:([1-9]\d*)\$|\(([^)]+)\))?(\+)?(0|'[^$])?(-)?(\d+)?(?:\.(\d+))?([b-gijostTuvxX])/,
+      key: /^([a-z_][a-z_\d]*)/i,
+      key_access: /^\.([a-z_][a-z_\d]*)/i,
+      index_access: /^\[(\d+)\]/,
+      sign: /^[+-]/
+    };
+    var cache = Object.create(null);
+    // BGO EDIT
+    Jed.prototype.clearCache = function () {
+      cache = Object.create(null);;
     }
-    function str_repeat(input, multiplier) {
-      for (var output = []; multiplier > 0; output[--multiplier] = input) {/* do nothing */}
-      return output.join('');
-    }
+    // BGO EDIT
 
-    var str_format = function() {
-      if (!str_format.cache.hasOwnProperty(arguments[0])) {
-        str_format.cache[arguments[0]] = str_format.parse(arguments[0]);
+    var str_format = function () {
+      if (!cache[arguments[0]]) {
+        cache[arguments[0]] = str_format.parse(arguments[0]);
       }
-      return str_format.format.call(null, str_format.cache[arguments[0]], arguments);
+      return str_format.format.call(null, cache[arguments[0]], arguments);
     };
 
-    str_format.format = function(parse_tree, argv) {
-      var cursor = 1, tree_length = parse_tree.length, node_type = '', arg, output = [], i, k, match, pad, pad_character, pad_length;
+    function sprintf(key) {
+      // `arguments` is not an array, but should be fine for this call
+      return str_format.format(str_format.parse(key), arguments)
+    }
+
+    str_format.format = function (parse_tree, argv) {
+      var cursor = 1, tree_length = parse_tree.length, arg, output = '', i, k, ph, pad, pad_character, pad_length, is_positive, sign
       for (i = 0; i < tree_length; i++) {
-        node_type = get_type(parse_tree[i]);
-        if (node_type === 'string') {
-          output.push(parse_tree[i]);
+        if (typeof parse_tree[i] === 'string') {
+          output += parse_tree[i]
         }
-        else if (node_type === 'array') {
-          match = parse_tree[i]; // convenience purposes only
-          if (match[2]) { // keyword argument
-            arg = argv[cursor];
-            for (k = 0; k < match[2].length; k++) {
-              if (!arg.hasOwnProperty(match[2][k])) {
-                throw(sprintf('[sprintf] property "%s" does not exist', match[2][k]));
+        else if (typeof parse_tree[i] === 'object') {
+          ph = parse_tree[i] // convenience purposes only
+          if (ph.keys) { // keyword argument
+            arg = argv[cursor]
+            for (k = 0; k < ph.keys.length; k++) {
+              if (arg == undefined) {
+                throw new Error(sprintf('[sprintf] Cannot access property "%s" of undefined value "%s"', ph.keys[k], ph.keys[k - 1]))
               }
-              arg = arg[match[2][k]];
+              arg = arg[ph.keys[k]]
             }
           }
-          else if (match[1]) { // positional argument (explicit)
-            arg = argv[match[1]];
+          else if (ph.param_no) { // positional argument (explicit)
+            arg = argv[ph.param_no]
           }
           else { // positional argument (implicit)
-            arg = argv[cursor++];
+            arg = argv[cursor++]
           }
 
-          if (/[^s]/.test(match[8]) && (get_type(arg) != 'number')) {
-            throw(sprintf('[sprintf] expecting number but found %s', get_type(arg)));
+          if (re.not_type.test(ph.type) && re.not_primitive.test(ph.type) && arg instanceof Function) {
+            arg = arg()
+          }
+
+          if (re.numeric_arg.test(ph.type) && (typeof arg !== 'number' && isNaN(arg))) {
+            throw new TypeError(sprintf('[sprintf] expecting number but found %T', arg))
+          }
+
+          if (re.number.test(ph.type)) {
+            is_positive = arg >= 0
           }
 
           // Jed EDIT
@@ -390,76 +418,142 @@ in order to offer easy upgrades -- jsgettext.berlios.de
           }
           // Jed EDIT
 
-          switch (match[8]) {
-            case 'b': arg = arg.toString(2); break;
-            case 'c': arg = String.fromCharCode(arg); break;
-            case 'd': arg = parseInt(arg, 10); break;
-            case 'e': arg = match[7] ? arg.toExponential(match[7]) : arg.toExponential(); break;
-            case 'f': arg = match[7] ? parseFloat(arg).toFixed(match[7]) : parseFloat(arg); break;
-            case 'o': arg = arg.toString(8); break;
-            case 's': arg = ((arg = String(arg)) && match[7] ? arg.substring(0, match[7]) : arg); break;
-            case 'u': arg = Math.abs(arg); break;
-            case 'x': arg = arg.toString(16); break;
-            case 'X': arg = arg.toString(16).toUpperCase(); break;
+          switch (ph.type) {
+            case 'b':
+              arg = parseInt(arg, 10).toString(2)
+              break
+            case 'c':
+              arg = String.fromCharCode(parseInt(arg, 10))
+              break
+            case 'd':
+            case 'i':
+              arg = parseInt(arg, 10)
+              break
+            case 'j':
+              arg = JSON.stringify(arg, null, ph.width ? parseInt(ph.width) : 0)
+              break
+            case 'e':
+              arg = ph.precision ? parseFloat(arg).toExponential(ph.precision) : parseFloat(arg).toExponential()
+              break
+            case 'f':
+              arg = ph.precision ? parseFloat(arg).toFixed(ph.precision) : parseFloat(arg)
+              break
+            case 'g':
+              arg = ph.precision ? String(Number(arg.toPrecision(ph.precision))) : parseFloat(arg)
+              break
+            case 'o':
+              arg = (parseInt(arg, 10) >>> 0).toString(8)
+              break
+            case 's':
+              arg = String(arg)
+              arg = (ph.precision ? arg.substring(0, ph.precision) : arg)
+              break
+            case 't':
+              arg = String(!!arg)
+              arg = (ph.precision ? arg.substring(0, ph.precision) : arg)
+              break
+            case 'T':
+              arg = Object.prototype.toString.call(arg).slice(8, -1).toLowerCase()
+              arg = (ph.precision ? arg.substring(0, ph.precision) : arg)
+              break
+            case 'u':
+              arg = parseInt(arg, 10) >>> 0
+              break
+            case 'v':
+              arg = arg.valueOf()
+              arg = (ph.precision ? arg.substring(0, ph.precision) : arg)
+              break
+            case 'x':
+              arg = (parseInt(arg, 10) >>> 0).toString(16)
+              break
+            case 'X':
+              arg = (parseInt(arg, 10) >>> 0).toString(16).toUpperCase()
+              break
           }
-          arg = (/[def]/.test(match[8]) && match[3] && arg >= 0 ? '+'+ arg : arg);
-          pad_character = match[4] ? match[4] == '0' ? '0' : match[4].charAt(1) : ' ';
-          pad_length = match[6] - String(arg).length;
-          pad = match[6] ? str_repeat(pad_character, pad_length) : '';
-          output.push(match[5] ? arg + pad : pad + arg);
+          if (re.json.test(ph.type)) {
+            output += arg
+          }
+          else {
+            if (re.number.test(ph.type) && (!is_positive || ph.sign)) {
+              sign = is_positive ? '+' : '-'
+              arg = arg.toString().replace(re.sign, '')
+            }
+            else {
+              sign = ''
+            }
+            pad_character = ph.pad_char ? ph.pad_char === '0' ? '0' : ph.pad_char.charAt(1) : ' '
+            pad_length = ph.width - (sign + arg).length
+            pad = ph.width ? (pad_length > 0 ? pad_character.repeat(pad_length) : '') : ''
+            output += ph.align ? sign + arg + pad : (pad_character === '0' ? sign + pad + arg : pad + sign + arg)
+          }
         }
       }
-      return output.join('');
-    };
+      return output
+    }
 
-    str_format.cache = {};
+    str_format.parse = function (fmt) {
+      if (cache[fmt]) {
+        return cache[fmt]
+      }
 
-    str_format.parse = function(fmt) {
-      var _fmt = fmt, match = [], parse_tree = [], arg_names = 0;
+      var _fmt = fmt, match, parse_tree = [], arg_names = 0
       while (_fmt) {
-        if ((match = /^[^\x25]+/.exec(_fmt)) !== null) {
-          parse_tree.push(match[0]);
+        if ((match = re.text.exec(_fmt)) !== null) {
+          parse_tree.push(match[0])
         }
-        else if ((match = /^\x25{2}/.exec(_fmt)) !== null) {
-          parse_tree.push('%');
+        else if ((match = re.modulo.exec(_fmt)) !== null) {
+          parse_tree.push('%')
         }
-        else if ((match = /^\x25(?:([1-9]\d*)\$|\(([^\)]+)\))?(\+)?(0|'[^$])?(-)?(\d+)?(?:\.(\d+))?([b-fosuxX])/.exec(_fmt)) !== null) {
+        else if ((match = re.placeholder.exec(_fmt)) !== null) {
           if (match[2]) {
-            arg_names |= 1;
-            var field_list = [], replacement_field = match[2], field_match = [];
-            if ((field_match = /^([a-z_][a-z_\d]*)/i.exec(replacement_field)) !== null) {
-              field_list.push(field_match[1]);
+            arg_names |= 1
+            var field_list = [], replacement_field = match[2], field_match = []
+            if ((field_match = re.key.exec(replacement_field)) !== null) {
+              field_list.push(field_match[1])
               while ((replacement_field = replacement_field.substring(field_match[0].length)) !== '') {
-                if ((field_match = /^\.([a-z_][a-z_\d]*)/i.exec(replacement_field)) !== null) {
-                  field_list.push(field_match[1]);
+                if ((field_match = re.key_access.exec(replacement_field)) !== null) {
+                  field_list.push(field_match[1])
                 }
-                else if ((field_match = /^\[(\d+)\]/.exec(replacement_field)) !== null) {
-                  field_list.push(field_match[1]);
+                else if ((field_match = re.index_access.exec(replacement_field)) !== null) {
+                  field_list.push(field_match[1])
                 }
                 else {
-                  throw('[sprintf] huh?');
+                  throw new SyntaxError('[sprintf] failed to parse named argument key')
                 }
               }
             }
             else {
-              throw('[sprintf] huh?');
+              throw new SyntaxError('[sprintf] failed to parse named argument key')
             }
-            match[2] = field_list;
+            match[2] = field_list
           }
           else {
-            arg_names |= 2;
+            arg_names |= 2
           }
           if (arg_names === 3) {
-            throw('[sprintf] mixing positional and named placeholders is not (yet) supported');
+            throw new Error('[sprintf] mixing positional and named placeholders is not (yet) supported')
           }
-          parse_tree.push(match);
+
+          parse_tree.push(
+            {
+              placeholder: match[0],
+              param_no: match[1],
+              keys: match[2],
+              sign: match[3],
+              pad_char: match[4],
+              align: match[5],
+              width: match[6],
+              precision: match[7],
+              type: match[8]
+            }
+          )
         }
         else {
-          throw('[sprintf] huh?');
+          throw new SyntaxError('[sprintf] unexpected placeholder')
         }
-        _fmt = _fmt.substring(match[0].length);
+        _fmt = _fmt.substring(match[0].length)
       }
-      return parse_tree;
+      return cache[fmt] = parse_tree
     };
 
     return str_format;
@@ -600,15 +694,15 @@ performAction: function anonymous(yytext,yyleng,yylineno,yy,yystate,$$,_$) {
 
 var $0 = $$.length - 1;
 switch (yystate) {
-case 1: return { type : 'GROUP', expr: $$[$0-1] }; 
+case 1: return { type : 'GROUP', expr: $$[$0-1] };
 break;
-case 2:this.$ = { type: 'TERNARY', expr: $$[$0-4], truthy : $$[$0-2], falsey: $$[$0] }; 
+case 2:this.$ = { type: 'TERNARY', expr: $$[$0-4], truthy : $$[$0-2], falsey: $$[$0] };
 break;
 case 3:this.$ = { type: "OR", left: $$[$0-2], right: $$[$0] };
 break;
 case 4:this.$ = { type: "AND", left: $$[$0-2], right: $$[$0] };
 break;
-case 5:this.$ = { type: 'LT', left: $$[$0-2], right: $$[$0] }; 
+case 5:this.$ = { type: 'LT', left: $$[$0-2], right: $$[$0] };
 break;
 case 6:this.$ = { type: 'LTE', left: $$[$0-2], right: $$[$0] };
 break;
@@ -622,11 +716,11 @@ case 10:this.$ = { type: 'EQ', left: $$[$0-2], right: $$[$0] };
 break;
 case 11:this.$ = { type: 'MOD', left: $$[$0-2], right: $$[$0] };
 break;
-case 12:this.$ = { type: 'GROUP', expr: $$[$0-1] }; 
+case 12:this.$ = { type: 'GROUP', expr: $$[$0-1] };
 break;
-case 13:this.$ = { type: 'VAR' }; 
+case 13:this.$ = { type: 'VAR' };
 break;
-case 14:this.$ = { type: 'NUM', val: Number(yytext) }; 
+case 14:this.$ = { type: 'NUM', val: Number(yytext) };
 break;
 }
 },
@@ -912,7 +1006,7 @@ next:function () {
         if (this._input === "") {
             return this.EOF;
         } else {
-            this.parseError('Lexical error on line '+(this.yylineno+1)+'. Unrecognized text.\n'+this.showPosition(), 
+            this.parseError('Lexical error on line '+(this.yylineno+1)+'. Unrecognized text.\n'+this.showPosition(),
                     {text: "", token: null, line: this.yylineno});
         }
     },
